@@ -289,6 +289,7 @@ int dictRehash(dict *d, int n) {
 - - 在对应的bucket中插入数据的时候，总是插入到dictEntry的头部。因为新数据接下来被访问的概率可能比较高，这样再次查找它时就比较次数较少。
 - _dictKeyIndex在dict中寻找插入位置。如果不在重哈希过程中，它只查找ht[0]；否则查找ht[0]和ht[1]。
 - _dictKeyIndex可能触发dict内存扩展（_dictExpandIfNeeded，它将哈希表长度扩展为原来两倍，具体请参考dict.c中源码）。
+- 如果处于重 hash 过程中，则总是选择第二个表插入
 ```
 /* Add an element to the target hash table */
 int dictAdd(dict *d, void *key, void *val)

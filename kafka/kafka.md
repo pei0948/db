@@ -1,8 +1,14 @@
 ### 简介
+- Kafka是最初由Linkedin公司开发，
+- 是一个分布式、支持分区的（partition）、多副本的（replica），基于zookeeper协调的分布式消息系统，
+- 它的最大的特性就是可以实时的处理大量数据以满足各种需求场景：比如基于hadoop的批处理系统、低延迟的实时系统、storm/Spark流式处理引擎，web/nginx日志、访问日志，消息服务等等，
+- 用scala语言编写，Linkedin于2010年贡献给了Apache基金会并成为顶级开源项目。
+- Kafka是一种高吞吐量的分布式发布订阅消息系统
 - Kafka 是一个分布式流处理平台，主要用于实时数据管道和流处理。它的工作原理主要包括以下几个方面：
 ![kafka](images/architecture.png)
 
 ### 核心模块
+- topic 是为了业务分类，partition 是为了数据的并行消费
 ![work flow](images/work_flow.png)
 #### 1. 生产者（Producer）
 生产者，负责向 Kafka 主题（Topic）发布消息。
@@ -47,20 +53,98 @@ Kafka 通过偏移量（Offset）来跟踪每个分区中消息的消费进度�
 - 文件的命名是以该segment最小offset来命名的，如000.index存储offset为0~368795的消息，kafka就是利用分段+索引的方式来解决查找效率的问题。
 ![partition](images/kafka_partion.png)
 
-#### 7. broker
+#### 7. follower
+- 负责复制领导副本的数据
+- 如果领导副本发生故障，Kafka 会自动从跟随副本中选举一个新的领导副本，以确保数据的可用性。
+- 配置 unclean.leader.election.enable = false 时，不会从与 leader 同步程度达不到要求的 follower 副本中选择出 leader 
+- min.insync.replicas> 1 配置代表消息至少要被写入到 2 个副本才算是被成功发送
+- 一般会为 topic 设置 replication.factor >= 3。这样就可以保证每个 分区(partition) 至少有 3 个副本。虽然造成了数据冗余，但是带来了数据的安全性
+- 一般推荐设置成 replication.factor = min.insync.replicas + 1
+- 每当生产者将新消息写入 leader 副本时，leader 会将这些新消息添加到其日志中，并通知 follower 副本进行同步
+- follower 副本会定期向 leader 发送心跳请求，以确认其存活状态并请求新的数据
+- follower 副本在接收到数据并成功写入本地日志后，会向 leader 发送确认（ack）。
+
+#### 8. broker
 Kafka 集群中的节点，负责存储和传递消息
 - 如果某个 Topic 下有 n 个Partition 且集群有 n 个Broker，那么每个 Broker会存储该 Topic 下的一个 Partition
 - 如果某个 Topic 下有 n 个Partition 且集群中有 m+n 个Broker，那么只有 n 个Broker会存储该Topic下的一个 Partition
 - 如果某个 Topic 下有 n 个Partition 且集群中的Broker数量小于 n，那么一个 Broker 会存储该 Topic 下的一个或多个 Partition，这种情况尽量避免，会导致集群数据不均衡
 
 
-#### 8. topic
+#### 9. topic
 主题，消息的分类和逻辑隔离，类似于消息队列的名称。
 
 
-#### 9. offset
+#### 10. offset
 偏移量，每个分区中的消息都有一个唯一的偏移量，用于标识消息在分区中的位置。
 
+
+### zookeeper
+- Zookeeper 在 Kafka 集群中扮演着协调者和管理者的角色，
+- 负责 Broker 注册和发现、分区领导者选举、消费者组协调、偏移量管理、集群配置管理以及元数据管理等任务。
+- 通过使用 Zookeeper，Kafka 能够实现高可用性、高可靠性和一致性的数据流处理和存储。
+#### 集群管理和协调
+1. Broker 注册和发现
+- **Broker 注册**：当 Kafka Broker 启动时，它会向 Zookeeper 注册自身的信息，如主机名和端口号。Zookeeper 维护了一个动态更新的 Broker 列表，方便其他组件（如生产者和消费者）发现 Broker。
+- **Broker 发现**：生产者和消费者通过 Zookeeper 获取 Kafka 集群中的 Broker 列表，以便于连接和发送/接收消息。
+- Broker 注册，也就是 Kafka 节点注册，本质上是在 ZooKeeper 中创建一个专属的目录（又称为节点），其路径为 /brokers
+
+2. Broker 健康监控
+- Zookeeper 持续监控各个 Broker 的健康状态。如果一个 Broker 失效（即无法与 Zookeeper 保持心跳），Zookeeper 会将其从活跃 Broker 列表中移除，通知 Kafka 集群进行相应的故障处理。
+
+#### topic 注册
+在 Kafka 中，所有 Topic 与 Broker 的对应关系都由 ZooKeeper 来维护，在 ZooKeeper 中，通过建立专属的节点来存储这些信息，其路径为
+```shell
+/brokers/topics/{topic_name}
+```
+
+#### 分区和副本管理
+1. 分区领导者选举
+- **领导者选举**：每个分区都有一个领导副本（Leader），负责处理读写请求。Zookeeper 负责选举分区的领导副本，并确保每个分区在集群中的唯一领导者。
+- **故障切换**：如果领导副本故障，Zookeeper 会选举一个新的领导副本（从跟随副本中选举），确保分区的高可用性和数据一致性。
+
+2. 副本同步状态管理
+- Zookeeper 维护着分区副本的同步状态信息，包括哪些副本是同步的（In-Sync Replicas, ISR）。这些信息用于确保数据一致性和在领导者失效时正确选举新的领导者。
+
+#### 消费者组管理
+1. 与 Broker、Topic 注册类似，Consumer Group 注册本质上也是在 ZooKeeper 中创建专属的节点，以记录相关信息，其路径为: 
+- /consumers/{group_id}
+  - ids：Consumer Group 中有多个 Consumer，ids 用于记录这些 Consumer；
+  - owners：记录该 Consumer Group 可消费的 Topic 信息
+  - offsets：记录 owners 中每个 Topic 的所有 Partition 的 Offset
+
+2. Consumer 注册需在路径 / consumers/{group_id}/ids 下创建专属子节点
+- / consumers/{group_id}/ids/my_consumer_for_test-1223234-fdfv1233df23
+
+
+3. 消费者组协调
+- **组协调器**：每个消费者组有一个组协调器（Group Coordinator），负责管理消费者组的成员信息。组协调器的选举和管理由 Zookeeper 负责。
+- **分区分配**：消费者组内的消费者通过 Zookeeper 协调，确保每个分区仅由一个消费者处理，避免消息重复消费。
+
+#### 偏移量管理
+- **偏移量存储**：Kafka 0.9 及之前版本中，消费者的偏移量存储在 Zookeeper 中。消费者会定期更新自己的消费偏移量，Zookeeper 负责持久化这些偏移量信息。
+- 在 Kafka 0.9 之后，偏移量存储移到了 Kafka 自身的特殊 Topic（`__consumer_offsets`）中，但 Zookeeper 仍然在消费者组协调中扮演重要角色。
+
+#### 集群配置管理
+- Zookeeper 存储和管理 Kafka 集群的配置信息，包括 Broker 配置、Topic 配置等。管理员可以通过 Zookeeper 动态更新配置，Kafka 集群会实时读取并应用这些配置信息。
+
+#### 元数据管理
+- **元数据存储**：Zookeeper 存储 Kafka 集群的元数据信息，如 Topic、分区、副本分配等。这些元数据对于 Kafka 的正常运行和故障恢复至关重要。
+- **元数据更新**：当 Kafka 集群中的元数据发生变化（如创建 Topic、增加分区等）时，Zookeeper 会通知相关组件（如 Broker、生产者、消费者）及时更新元数据。
+
+#### 负载均衡
+1. producer 负载均衡
+如何将消息均衡地 Push 到各个 Partition 呢？这便是 Producers 负载均衡的问题
+- Producers 会通过 Watcher 机制监听 Brokers 注册节点的变化。
+- 一旦 Brokers 发生变化，如增加、减少，Producers 可以收到通知并更新自己记录的 Broker 列表 。
+- Producer 向 Kafka 集群 Push 消息的时候，必须指定 Topic，不过，Partition 却是非必要的
+- 不支持指定 Partition，隐藏相关细节，内部则采用轮询、对传入 Key 进行 Hash 等策略将消息数据均衡地发送到各个 Partition
+
+2. consumer 负载均衡
+- 在 Consumer 消费消息时，高级别 API 只需指定 Topic 即可，隐藏了负载均衡策略；而低级别的 API 通常需要同时指定 Topic 和 Partition，需要自行实现负载均衡策略。
+- 高级别 API 的负载均衡策略需借助 ZooKeeper 实现：
+  - 基于 ZooKeeper 提供的 Watcher，Consumer 可以监听同一 Group 中 Consumers 的变化，以及 Broker 列表的变化
+  - 进一步，根据 Consumer 列表，将 Partition 排序后，轮流进行分配。由于这是一个动态过程，相应的负载均衡被称为 Rebalance
 
 ### 高可用性和扩展性
 1. **分区和副本**：
@@ -164,3 +248,5 @@ Kafka 的设计使其能够在高吞吐量、低延迟、高可用性和可扩�
 
 ### 相关链接
 - [Kafka基本原理详解（超详细！）](https://blog.csdn.net/weixin_45366499/article/details/106943229)
+- [Kafka中Zookeeper的作用](https://developer.baidu.com/article/details/2897784)
+- [Kafka 架构中 ZooKeeper 以怎样的形式存在？](https://cloud.tencent.com/developer/article/1799525)
